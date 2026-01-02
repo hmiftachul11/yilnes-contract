@@ -1,0 +1,82 @@
+# Compiler files
+cache/
+out/
+
+# Ignores development broadcast logs
+!/broadcast
+/broadcast/*/31337/
+/broadcast/**/dry-run/
+
+# Docs
+docs/
+
+# Dotenv file
+.env
+
+# Private keys (never commit these!)
+*.private.key
+private_keys/
+keys/
+
+# Deployment artifacts
+deployments/localhost/
+deployments/hardhat/
+
+# Foundry artifacts  
+lib/
+artifacts/
+typechain/
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node modules (if using any npm packages)
+node_modules/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Coverage reports
+coverage/
+lcov.info
+
+# Gas reports
+gas-report.txt
+
+# Slither analysis
+.slither/
+
+# Mythril analysis  
+.mythril/
+
+# Local development
+.local/
+.temp/
+
+# Environment specific
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Backup files
+*.bak
+*.backup
+
+# Package manager files
+yarn.lock
+package-lock.json
+
+# Testing
+test-results/
+coverage.json
