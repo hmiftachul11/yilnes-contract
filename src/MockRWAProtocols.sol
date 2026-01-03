@@ -1,160 +1,76 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.20;
 
 import "forge-std/interfaces/IERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
-/**
- * @title MockOndoProtocol
- * @dev Mock implementation of Ondo Finance OUSG protocol
- */
-contract MockOndoProtocol {
+// Abstract Base for Mocks to reduce code duplication
+abstract contract MockRWAProtocol is Ownable {
     IERC20 public immutable usdc;
-    string public name = "Ondo US Dollar Yield";
-    string public symbol = "OUSY";
-    uint256 public constant APY = 500; // 5% APY
+    string public name;
+    string public symbol;
+    uint256 public immutable APY; // Basis points (500 = 5%)
     
     mapping(address => uint256) public deposits;
-    mapping(address => uint256) public depositTime;
+    mapping(address => uint256) public lastUpdate;
     
-    event Deposit(address indexed user, uint256 amount);
-    event Withdraw(address indexed user, uint256 amount);
-    
-    constructor(address _usdc) {
+    constructor(address _usdc, string memory _name, string memory _symbol, uint256 _apy) Ownable(msg.sender) {
         usdc = IERC20(_usdc);
+        name = _name;
+        symbol = _symbol;
+        APY = _apy;
     }
-    
+
     function deposit(uint256 amount) external {
+        _accrueInterest(msg.sender); // Update balance before deposit
         require(usdc.transferFrom(msg.sender, address(this), amount), "Transfer failed");
         deposits[msg.sender] += amount;
-        depositTime[msg.sender] = block.timestamp;
-        emit Deposit(msg.sender, amount);
     }
-    
+
     function withdraw(uint256 amount) external {
+        _accrueInterest(msg.sender); // Update balance before withdraw
         require(deposits[msg.sender] >= amount, "Insufficient balance");
+        
         deposits[msg.sender] -= amount;
+        
+        // In a real mock, we need to mint the extra yield USDC to pay the user.
+        // For this hackathon, we assume the MockUSDC contract has given this contract enough allowance
+        // OR we just transfer what we have. 
+        // Simplification: We just transfer back. 
+        // To simulate Yield properly, MockUSDC needs to be mintable by these contracts or pre-funded.
+        
         require(usdc.transfer(msg.sender, amount), "Transfer failed");
-        emit Withdraw(msg.sender, amount);
     }
-    
-    function getBalance(address user) external view returns (uint256) {
-        return deposits[user];
+
+    function getBalance(address user) public view returns (uint256) {
+        uint256 principal = deposits[user];
+        if (principal == 0) return 0;
+        
+        uint256 timeElapsed = block.timestamp - lastUpdate[user];
+        // Simple Interest: Principal * APY * Time / (10000 * 365 days)
+        uint256 interest = (principal * APY * timeElapsed) / (10000 * 365 days);
+        return principal + interest;
+    }
+
+    function _accrueInterest(address user) internal {
+        uint256 newBalance = getBalance(user);
+        deposits[user] = newBalance;
+        lastUpdate[user] = block.timestamp;
     }
 }
 
-/**
- * @title MockMapleProtocol  
- * @dev Mock implementation of Maple Finance protocol
- */
-contract MockMapleProtocol {
-    IERC20 public immutable usdc;
-    string public name = "Maple Credit Pool";
-    string public symbol = "MCP";
-    uint256 public constant APY = 800; // 8% APY
-    
-    mapping(address => uint256) public deposits;
-    mapping(address => uint256) public depositTime;
-    
-    event Deposit(address indexed user, uint256 amount);
-    event Withdraw(address indexed user, uint256 amount);
-    
-    constructor(address _usdc) {
-        usdc = IERC20(_usdc);
-    }
-    
-    function deposit(uint256 amount) external {
-        require(usdc.transferFrom(msg.sender, address(this), amount), "Transfer failed");
-        deposits[msg.sender] += amount;
-        depositTime[msg.sender] = block.timestamp;
-        emit Deposit(msg.sender, amount);
-    }
-    
-    function withdraw(uint256 amount) external {
-        require(deposits[msg.sender] >= amount, "Insufficient balance");
-        deposits[msg.sender] -= amount;
-        require(usdc.transfer(msg.sender, amount), "Transfer failed");
-        emit Withdraw(msg.sender, amount);
-    }
-    
-    function getBalance(address user) external view returns (uint256) {
-        return deposits[user];
-    }
+contract MockOndoProtocol is MockRWAProtocol {
+    constructor(address _usdc) MockRWAProtocol(_usdc, "Ondo USD Yield", "OUSY", 500) {}
 }
 
-/**
- * @title MockCentrifugeProtocol
- * @dev Mock implementation of Centrifuge protocol
- */
-contract MockCentrifugeProtocol {
-    IERC20 public immutable usdc;
-    string public name = "Centrifuge Real Estate Pool";
-    string public symbol = "CREP";
-    uint256 public constant APY = 1200; // 12% APY
-    
-    mapping(address => uint256) public deposits;
-    mapping(address => uint256) public depositTime;
-    
-    event Deposit(address indexed user, uint256 amount);
-    event Withdraw(address indexed user, uint256 amount);
-    
-    constructor(address _usdc) {
-        usdc = IERC20(_usdc);
-    }
-    
-    function deposit(uint256 amount) external {
-        require(usdc.transferFrom(msg.sender, address(this), amount), "Transfer failed");
-        deposits[msg.sender] += amount;
-        depositTime[msg.sender] = block.timestamp;
-        emit Deposit(msg.sender, amount);
-    }
-    
-    function withdraw(uint256 amount) external {
-        require(deposits[msg.sender] >= amount, "Insufficient balance");
-        deposits[msg.sender] -= amount;
-        require(usdc.transfer(msg.sender, amount), "Transfer failed");
-        emit Withdraw(msg.sender, amount);
-    }
-    
-    function getBalance(address user) external view returns (uint256) {
-        return deposits[user];
-    }
+contract MockMapleProtocol is MockRWAProtocol {
+    constructor(address _usdc) MockRWAProtocol(_usdc, "Maple Credit", "MCP", 800) {}
 }
 
-/**
- * @title MockGoldfinchProtocol
- * @dev Mock implementation of Goldfinch protocol
- */
-contract MockGoldfinchProtocol {
-    IERC20 public immutable usdc;
-    string public name = "Goldfinch Senior Pool";
-    string public symbol = "GSP";
-    uint256 public constant APY = 600; // 6% APY
-    
-    mapping(address => uint256) public deposits;
-    mapping(address => uint256) public depositTime;
-    
-    event Deposit(address indexed user, uint256 amount);
-    event Withdraw(address indexed user, uint256 amount);
-    
-    constructor(address _usdc) {
-        usdc = IERC20(_usdc);
-    }
-    
-    function deposit(uint256 amount) external {
-        require(usdc.transferFrom(msg.sender, address(this), amount), "Transfer failed");
-        deposits[msg.sender] += amount;
-        depositTime[msg.sender] = block.timestamp;
-        emit Deposit(msg.sender, amount);
-    }
-    
-    function withdraw(uint256 amount) external {
-        require(deposits[msg.sender] >= amount, "Insufficient balance");
-        deposits[msg.sender] -= amount;
-        require(usdc.transfer(msg.sender, amount), "Transfer failed");
-        emit Withdraw(msg.sender, amount);
-    }
-    
-    function getBalance(address user) external view returns (uint256) {
-        return deposits[user];
-    }
+contract MockCentrifugeProtocol is MockRWAProtocol {
+    constructor(address _usdc) MockRWAProtocol(_usdc, "Centrifuge Real Estate", "CREP", 1200) {}
+}
+
+contract MockGoldfinchProtocol is MockRWAProtocol {
+    constructor(address _usdc) MockRWAProtocol(_usdc, "Goldfinch Senior", "GSP", 600) {}
 }

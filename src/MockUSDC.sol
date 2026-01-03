@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.20;
 
 import "forge-std/interfaces/IERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
  * @title MockUSDC
  * @dev Mock USDC token for testing on Mantle Sepolia
  */
-contract MockUSDC is IERC20 {
+contract MockUSDC is IERC20, Ownable {
     string public name = "Mock USD Coin";
     string public symbol = "USDC";
     uint8 public decimals = 6;
@@ -24,7 +25,7 @@ contract MockUSDC is IERC20 {
     event Mint(address indexed to, uint256 amount);
     event FaucetUsed(address indexed user, uint256 amount);
     
-    constructor() {
+    constructor() Ownable(msg.sender) {
         // Mint initial supply to deployer
         _totalSupply = 1000000 * 10**decimals; // 1M USDC
         _balances[msg.sender] = _totalSupply;
@@ -79,9 +80,9 @@ contract MockUSDC is IERC20 {
     }
     
     /**
-     * @notice Mint tokens (only for testing)
+     * @notice Mint tokens (only for testing) - SECURED: Only owner can mint
      */
-    function mint(address to, uint256 amount) external {
+    function mint(address to, uint256 amount) external onlyOwner {
         _mint(to, amount);
     }
     
