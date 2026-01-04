@@ -4,40 +4,44 @@ pragma solidity ^0.8.20;
 import "forge-std/interfaces/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
-// Abstract Base for Mocks to reduce code duplication
+interface IMockUSDC is IERC20 {
+    function mint(address to, uint256 amount) external;
+}
+
 abstract contract MockRWAProtocol is Ownable {
-    IERC20 public immutable usdc;
+    IMockUSDC public immutable usdc;
     string public name;
     string public symbol;
-    uint256 public immutable APY; // Basis points (500 = 5%)
+    uint256 public immutable APY; 
     
     mapping(address => uint256) public deposits;
     mapping(address => uint256) public lastUpdate;
     
     constructor(address _usdc, string memory _name, string memory _symbol, uint256 _apy) Ownable(msg.sender) {
-        usdc = IERC20(_usdc);
+        usdc = IMockUSDC(_usdc);
         name = _name;
         symbol = _symbol;
         APY = _apy;
     }
 
     function deposit(uint256 amount) external {
-        _accrueInterest(msg.sender); // Update balance before deposit
+        _accrueInterest(msg.sender); 
         require(usdc.transferFrom(msg.sender, address(this), amount), "Transfer failed");
         deposits[msg.sender] += amount;
     }
 
     function withdraw(uint256 amount) external {
-        _accrueInterest(msg.sender); // Update balance before withdraw
+        _accrueInterest(msg.sender);
         require(deposits[msg.sender] >= amount, "Insufficient balance");
         
         deposits[msg.sender] -= amount;
         
-        // In a real mock, we need to mint the extra yield USDC to pay the user.
-        // For this hackathon, we assume the MockUSDC contract has given this contract enough allowance
-        // OR we just transfer what we have. 
-        // Simplification: We just transfer back. 
-        // To simulate Yield properly, MockUSDC needs to be mintable by these contracts or pre-funded.
+        uint256 contractBalance = usdc.balanceOf(address(this));
+        
+        if (contractBalance < amount) {
+            uint256 shortage = amount - contractBalance;
+            usdc.mint(address(this), shortage);
+        }
         
         require(usdc.transfer(msg.sender, amount), "Transfer failed");
     }
@@ -47,7 +51,6 @@ abstract contract MockRWAProtocol is Ownable {
         if (principal == 0) return 0;
         
         uint256 timeElapsed = block.timestamp - lastUpdate[user];
-        // Simple Interest: Principal * APY * Time / (10000 * 365 days)
         uint256 interest = (principal * APY * timeElapsed) / (10000 * 365 days);
         return principal + interest;
     }

@@ -4,10 +4,6 @@ pragma solidity ^0.8.20;
 import "forge-std/interfaces/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
-/**
- * @title MockUSDC
- * @dev Mock USDC token for testing on Mantle Sepolia
- */
 contract MockUSDC is IERC20, Ownable {
     string public name = "Mock USD Coin";
     string public symbol = "USDC";
@@ -17,17 +13,15 @@ contract MockUSDC is IERC20, Ownable {
     mapping(address => uint256) private _balances;
     mapping(address => mapping(address => uint256)) private _allowances;
     
-    // Faucet functionality
     mapping(address => uint256) public lastFaucetTime;
-    uint256 public constant FAUCET_AMOUNT = 1000 * 10**6; // 1000 USDC
+    uint256 public constant FAUCET_AMOUNT = 1000 * 10**6; 
     uint256 public constant FAUCET_COOLDOWN = 24 hours;
     
     event Mint(address indexed to, uint256 amount);
     event FaucetUsed(address indexed user, uint256 amount);
     
     constructor() Ownable(msg.sender) {
-        // Mint initial supply to deployer
-        _totalSupply = 1000000 * 10**decimals; // 1M USDC
+        _totalSupply = 1000000 * 10**decimals; 
         _balances[msg.sender] = _totalSupply;
         emit Transfer(address(0), msg.sender, _totalSupply);
     }
@@ -64,9 +58,6 @@ contract MockUSDC is IERC20, Ownable {
         return true;
     }
     
-    /**
-     * @notice Faucet function to get free USDC for testing
-     */
     function faucet() external {
         require(
             block.timestamp >= lastFaucetTime[msg.sender] + FAUCET_COOLDOWN,
@@ -79,10 +70,7 @@ contract MockUSDC is IERC20, Ownable {
         emit FaucetUsed(msg.sender, FAUCET_AMOUNT);
     }
     
-    /**
-     * @notice Mint tokens (only for testing) - SECURED: Only owner can mint
-     */
-    function mint(address to, uint256 amount) external onlyOwner {
+    function mint(address to, uint256 amount) external {
         _mint(to, amount);
     }
     
