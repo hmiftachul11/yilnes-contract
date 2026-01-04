@@ -25,9 +25,13 @@ contract YilnesVault is Ownable {
     
     uint256 public totalShares;
     
+    // --- INSURANCE STATE ---
+    uint256 public insuranceReserve;
+    uint256 public constant INSURANCE_FEE_BPS = 1000; // 10% of profits
+    
     event Deposit(address indexed user, uint256 amount, uint256 shares);
     event Withdraw(address indexed user, uint256 amount, uint256 shares);
-    event ClaimYield(address indexed user, uint256 amount);
+    event ClaimYield(address indexed user, uint256 payout, uint256 feePaid);
     event ProtocolAdded(address indexed protocol, uint256 allocation);
     
     error InsufficientBalance();
@@ -38,19 +42,19 @@ contract YilnesVault is Ownable {
         asset = IERC20(_asset);
     }
     
-    // --- Core Actions ---
-
     function deposit(uint256 amount) external {
         if (amount == 0) revert InvalidAmount();
         
-        uint256 totalManagedAssets = totalAssets(); 
+        // Calculate assets available for shares (Total - Reserve)
+        uint256 allocatableAssets = totalAssets() - insuranceReserve; 
+        
         require(asset.transferFrom(msg.sender, address(this), amount), "Transfer Failed");
         
         uint256 shares;
-        if (totalShares == 0 || totalManagedAssets == 0) {
+        if (totalShares == 0 || allocatableAssets == 0) {
             shares = amount;
         } else {
-            shares = (amount * totalShares) / totalManagedAssets;
+            shares = (amount * totalShares) / allocatableAssets;
         }
         
         if (protocols.length > 0) {
@@ -70,11 +74,22 @@ contract YilnesVault is Ownable {
         if (shares == 0) revert InvalidAmount();
         if (userShares[msg.sender] < shares) revert InsufficientBalance();
         
-        uint256 totalManagedAssets = totalAssets();
-        uint256 amountOut = (shares * totalManagedAssets) / totalShares;
+        uint256 allocatableAssets = totalAssets() - insuranceReserve;
+        uint256 grossAmount = (shares * allocatableAssets) / totalShares;
         
-        // Pro-rata reduction of principal
+        // Pro-rata principal reduction
         uint256 principalToBurn = (shares * userPrincipal[msg.sender]) / userShares[msg.sender];
+        
+        // Fee Logic: Check if withdrawing profit
+        uint256 payout = grossAmount;
+        
+        if (grossAmount > principalToBurn) {
+            uint256 profit = grossAmount - principalToBurn;
+            uint256 fee = (profit * INSURANCE_FEE_BPS) / 10000;
+            payout = grossAmount - fee;
+            insuranceReserve += fee; // Add to safety pool
+        }
+
         if (principalToBurn > userPrincipal[msg.sender]) {
              userPrincipal[msg.sender] = 0; 
         } else {
@@ -84,59 +99,53 @@ contract YilnesVault is Ownable {
         userShares[msg.sender] -= shares;
         totalShares -= shares;
         
-        _withdrawFromProtocol(amountOut);
+        _withdrawFromProtocol(payout);
         
-        emit Withdraw(msg.sender, amountOut, shares);
+        emit Withdraw(msg.sender, payout, shares);
     }
 
-    /**
-     * @notice Harvests only the profit, leaving principal staked
-     */
     function claimYield() external {
         uint256 currentVal = getUserBalance(msg.sender);
         uint256 principal = userPrincipal[msg.sender];
         
         if (currentVal <= principal) revert NoYieldToClaim();
         
-        uint256 yieldAmount = currentVal - principal;
-        uint256 totalManagedAssets = totalAssets();
+        uint256 grossProfit = currentVal - principal;
         
-        // Calculate shares representing ONLY the yield
-        // Formula: shares = (yieldAmount * totalShares) / totalManagedAssets
-        uint256 sharesToBurn = (yieldAmount * totalShares) / totalManagedAssets;
+        // --- INSURANCE FEE ---
+        uint256 fee = (grossProfit * INSURANCE_FEE_BPS) / 10000;
+        uint256 netPayout = grossProfit - fee;
         
-        // Safety cap
+        insuranceReserve += fee;
+        
+        // Burn shares equivalent to the GROSS profit withdrawn
+        uint256 allocatableAssets = totalAssets() - insuranceReserve;
+        uint256 sharesToBurn = (grossProfit * totalShares) / allocatableAssets;
+        
         if (sharesToBurn > userShares[msg.sender]) {
             sharesToBurn = userShares[msg.sender];
         }
 
-        // Burn shares, but DO NOT reduce principal (since principal remains)
         userShares[msg.sender] -= sharesToBurn;
         totalShares -= sharesToBurn;
         
-        _withdrawFromProtocol(yieldAmount);
+        _withdrawFromProtocol(netPayout);
         
-        emit ClaimYield(msg.sender, yieldAmount);
+        emit ClaimYield(msg.sender, netPayout, fee);
     }
 
-    // Internal helper to handle liquidity retrieval safely
     function _withdrawFromProtocol(uint256 amount) internal {
         uint256 looseCash = asset.balanceOf(address(this));
         if (looseCash < amount && protocols.length > 0) {
             uint256 shortage = amount - looseCash;
             IRWAProtocol(protocols[0].protocol).withdraw(shortage);
         }
-        
-        // Safety Clamp: If protocol sent 1 wei less due to rounding, use actual balance
         uint256 finalBalance = asset.balanceOf(address(this));
-        if (finalBalance < amount) {
-            amount = finalBalance;
-        }
+        if (finalBalance < amount) amount = finalBalance;
         
         require(asset.transfer(msg.sender, amount), "Transfer Out Failed");
     }
     
-    // --- Views ---
     function totalAssets() public view returns (uint256) {
         uint256 assets = asset.balanceOf(address(this));
         for(uint i = 0; i < protocols.length; i++) {
@@ -149,7 +158,9 @@ contract YilnesVault is Ownable {
     
     function getUserBalance(address user) public view returns (uint256) {
         if (totalShares == 0) return 0;
-        return (userShares[user] * totalAssets()) / totalShares;
+        // User only owns the Allocatable part, not the Reserve
+        uint256 allocatableAssets = totalAssets() - insuranceReserve;
+        return (userShares[user] * allocatableAssets) / totalShares;
     }
     
     function getUserYield(address user) external view returns (uint256) {
@@ -159,8 +170,13 @@ contract YilnesVault is Ownable {
         return 0;
     }
 
+    // New View for UI
+    function getInsuranceReserve() external view returns (uint256) {
+        return insuranceReserve;
+    }
+
     function getTVL() external view returns (uint256) { return totalAssets(); }
-    function getCurrentAPY() external pure returns (uint256) { return 1200; }
+    function getCurrentAPY() external pure returns (uint256) { return 1200; } // 12% Base
     
     function addProtocol(address _protocol, uint256 _allocation) external onlyOwner {
         protocols.push(ProtocolAllocation({protocol: _protocol, allocationBps: _allocation, isActive: true}));
