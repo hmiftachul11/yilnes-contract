@@ -26,16 +26,16 @@ contract DeployScript is Script {
         // 3. Deploy Mock RWA Protocols
         console.log("Deploying Mock RWA Protocols...");
         
-        MockOndoProtocol ondo = new MockOndoProtocol(address(usdc));
+        MockOndoProtocol ondo = new MockOndoProtocol(address(usdc), address(vault));
         console.log("MockOndoProtocol deployed at:", address(ondo));
         
-        MockMapleProtocol maple = new MockMapleProtocol(address(usdc));
+        MockMapleProtocol maple = new MockMapleProtocol(address(usdc), address(vault));
         console.log("MockMapleProtocol deployed at:", address(maple));
         
-        MockCentrifugeProtocol centrifuge = new MockCentrifugeProtocol(address(usdc));
+        MockCentrifugeProtocol centrifuge = new MockCentrifugeProtocol(address(usdc), address(vault));
         console.log("MockCentrifugeProtocol deployed at:", address(centrifuge));
         
-        MockGoldfinchProtocol goldfinch = new MockGoldfinchProtocol(address(usdc));
+        MockGoldfinchProtocol goldfinch = new MockGoldfinchProtocol(address(usdc), address(vault));
         console.log("MockGoldfinchProtocol deployed at:", address(goldfinch));
         
         // 4. Add protocols to vault

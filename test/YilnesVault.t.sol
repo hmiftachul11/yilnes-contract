@@ -18,7 +18,7 @@ contract YilnesVaultTest is Test {
         // Deploy contracts
         usdc = new MockUSDC();
         vault = new YilnesVault(address(usdc));
-        ondo = new MockOndoProtocol(address(usdc));
+        ondo = new MockOndoProtocol(address(usdc), address(vault));
         
         // Setup test tokens
         usdc.mint(user1, 10000 * 10**6); // 10,000 USDC

@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
-// Interface for our updated Protocols
+// Interface for underlying protocols
 interface IRWAProtocol {
     function deposit(uint256 amount) external;
     function withdraw(uint256 amount) external;
@@ -36,9 +36,24 @@ contract YilnesVault is Ownable {
     event Withdraw(address indexed user, uint256 amount, uint256 sharesBurned);
     event ClaimYield(address indexed user, uint256 payout, uint256 insuranceFee);
     event ProtocolAdded(address indexed protocol, uint256 allocation);
+    event InsuranceFunded(address indexed source, uint256 amount);
     
     constructor(address _asset) Ownable(msg.sender) {
         asset = IERC20(_asset);
+    }
+
+    // --- NEW: External Insurance Funding ---
+    // Allows external protocols (Ondo, Maple) to send 10% fee here
+    function depositInsuranceProfit(uint256 amount) external {
+        require(amount > 0, "Amount must be > 0");
+        
+        // Transfer USDC from the Protocol to this Vault
+        require(asset.transferFrom(msg.sender, address(this), amount), "Transfer failed");
+        
+        // Add to Reserve (NOT to allocatable assets)
+        insuranceReserve += amount;
+        
+        emit InsuranceFunded(msg.sender, amount);
     }
     
     // --- 1. DEPOSIT ---
@@ -57,7 +72,7 @@ contract YilnesVault is Ownable {
             shares = (amount * totalShares) / allocatableAssets;
         }
         
-        // Invest in underlying protocol
+        // Invest in underlying protocol (First active one for demo)
         if (protocols.length > 0) {
             address targetProtocol = protocols[0].protocol;
             asset.approve(targetProtocol, amount);
@@ -76,11 +91,16 @@ contract YilnesVault is Ownable {
         require(amount > 0, "Invalid amount");
         require(amount <= userPrincipal[msg.sender], "Exceeds principal. Use Claim for profits.");
         
-        // Determine how many shares to burn to retrieve this principal amount
         uint256 allocatableAssets = totalAssets() - insuranceReserve;
-        uint256 sharesToBurn = (amount * totalShares) / allocatableAssets;
         
-        // Safety clamp for rounding errors
+        // Calculate shares to burn
+        uint256 sharesToBurn;
+        if (totalShares == 0 || allocatableAssets == 0) {
+             sharesToBurn = 0; // Should not happen if amount > 0
+        } else {
+             sharesToBurn = (amount * totalShares) / allocatableAssets;
+        }
+        
         if (sharesToBurn > userShares[msg.sender]) {
             sharesToBurn = userShares[msg.sender];
         }
@@ -128,24 +148,14 @@ contract YilnesVault is Ownable {
     // --- INTERNAL & VIEWS ---
 
     function _withdrawFromProtocol(uint256 amount) internal {
-        // Try to pay from loose cash first
         uint256 looseCash = asset.balanceOf(address(this));
         
         if (looseCash < amount && protocols.length > 0) {
-            // Need more cash? Ask the underlying protocol
             uint256 shortage = amount - looseCash;
-            
-            // Note: We try to withdraw PRINCIPAL first from underlying, 
-            // but if that fails/isn't enough, we might need a 'claim' mechanism 
-            // on the underlying. For this Mock, withdraw() handles getting funds.
             IRWAProtocol(protocols[0].protocol).withdraw(shortage);
         }
         
-        // Double check balance after withdrawal attempt
         uint256 finalBalance = asset.balanceOf(address(this));
-        
-        // If we STILL don't have enough (maybe due to fees or liquidity), pay what we have
-        // But for Infinite Liquidity Mock, this shouldn't happen.
         if (finalBalance < amount) amount = finalBalance;
         
         require(asset.transfer(msg.sender, amount), "Transfer Out Failed");
