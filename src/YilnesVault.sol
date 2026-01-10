@@ -23,12 +23,10 @@ contract YilnesVault is Ownable, ReentrancyGuard {
     
     ProtocolAllocation[] public protocols;
     
-    // User Tracking
     mapping(address => uint256) public userShares;
     mapping(address => uint256) public userPrincipal;
     uint256 public totalShares;
     
-    // Insurance
     uint256 public insuranceReserve;
     uint256 public constant INSURANCE_FEE_BPS = 1000; // 10%
     
@@ -42,7 +40,6 @@ contract YilnesVault is Ownable, ReentrancyGuard {
         asset = IERC20(_asset);
     }
     
-    // --- EXTERNAL INSURANCE FUNDING ---
     function depositInsuranceProfit(uint256 amount) external nonReentrant {
         require(amount > 0, "Amount must be > 0");
         require(asset.transferFrom(msg.sender, address(this), amount), "Transfer failed");
@@ -51,7 +48,6 @@ contract YilnesVault is Ownable, ReentrancyGuard {
         emit InsuranceFunded(msg.sender, amount);
     }
     
-    // --- 1. DEPOSIT ---
     function deposit(uint256 amount) external nonReentrant {
         require(amount > 0, "Invalid amount");
         
@@ -65,7 +61,6 @@ contract YilnesVault is Ownable, ReentrancyGuard {
             shares = (amount * totalShares) / allocatableAssets;
         }
         
-        // Auto-Invest
         if (protocols.length > 0) {
             address targetProtocol = protocols[0].protocol;
             asset.approve(targetProtocol, amount);
@@ -79,7 +74,6 @@ contract YilnesVault is Ownable, ReentrancyGuard {
         emit Deposit(msg.sender, amount, shares);
     }
     
-    // --- 2. WITHDRAW (Principal) ---
     function withdraw(uint256 amount) external nonReentrant {
         require(amount > 0, "Invalid amount");
         require(amount <= userPrincipal[msg.sender], "Use Claim for profits");
@@ -87,7 +81,6 @@ contract YilnesVault is Ownable, ReentrancyGuard {
         uint256 allocatableAssets = totalAssets() - insuranceReserve;
         require(allocatableAssets > 0, "System empty");
         
-        // Calculate Shares: Clamp to ensure we don't over-burn due to rounding
         uint256 sharesToBurn = (amount * totalShares) / allocatableAssets;
         if (sharesToBurn > userShares[msg.sender]) {
             sharesToBurn = userShares[msg.sender];
@@ -97,13 +90,11 @@ contract YilnesVault is Ownable, ReentrancyGuard {
         userShares[msg.sender] -= sharesToBurn;
         totalShares -= sharesToBurn;
         
-        // Withdraw Principal: ALLOW touching underlying principal
         _withdrawFromProtocol(amount, true);
         
         emit Withdraw(msg.sender, amount, sharesToBurn);
     }
 
-    // --- 3. CLAIM (Yield) ---
     function claimYield() external nonReentrant {
         uint256 currentVal = getUserBalance(msg.sender);
         uint256 principal = userPrincipal[msg.sender];
@@ -112,17 +103,12 @@ contract YilnesVault is Ownable, ReentrancyGuard {
         
         uint256 idealGrossProfit = currentVal - principal;
         
-        // 1. Attempt to harvest yield from protocol to cover this profit
         if (protocols.length > 0) {
             try IRWAProtocol(protocols[0].protocol).claimYield() {} catch {}
         }
         
-        // 2. Check how much cash we actually have available for this payout
-        // We DO NOT allow touching principal for yield payouts to prevent "Principal Bleed"
         uint256 availableCash = asset.balanceOf(address(this));
         
-        // 3. Cap the payout to available cash. 
-        // If we are short by 0.000001 due to rounding, we just pay 0.000001 less.
         uint256 actualGrossProfit = idealGrossProfit;
         if (availableCash < actualGrossProfit) {
             actualGrossProfit = availableCash;
@@ -130,13 +116,11 @@ contract YilnesVault is Ownable, ReentrancyGuard {
 
         require(actualGrossProfit > 0, "Yield not realized yet");
 
-        // 4. Calculate Fees & Net Payout on ACTUAL profit
         uint256 fee = (actualGrossProfit * INSURANCE_FEE_BPS) / 10000;
         uint256 netPayout = actualGrossProfit - fee;
         
         insuranceReserve += fee;
         
-        // 5. Burn Shares based on ACTUAL profit
         uint256 allocatableAssets = totalAssets() - insuranceReserve;
         uint256 sharesToBurn = (actualGrossProfit * totalShares) / allocatableAssets;
         
@@ -147,37 +131,28 @@ contract YilnesVault is Ownable, ReentrancyGuard {
         userShares[msg.sender] -= sharesToBurn;
         totalShares -= sharesToBurn;
         
-        // 6. Transfer Payout (We know we have the cash because we capped it)
         require(asset.transfer(msg.sender, netPayout), "Transfer Out Failed");
         
         emit ClaimYield(msg.sender, netPayout, fee);
     }
 
-    // --- INTERNAL & VIEWS ---
 
-    /**
-     * @dev Fetches funds. 
-     * @param allowPrincipal If true, can withdraw from protocol principal. If false, ONLY harvests yield.
-     */
     function _withdrawFromProtocol(uint256 amount, bool allowPrincipal) internal {
         uint256 looseCash = asset.balanceOf(address(this));
         
         if (looseCash < amount && protocols.length > 0) {
             address strategy = protocols[0].protocol;
             
-            // Always try to harvest yield first
             try IRWAProtocol(strategy).claimYield() {} catch {}
             
             looseCash = asset.balanceOf(address(this));
             
-            // Only withdraw from principal if specifically allowed (e.g. user withdrawing principal)
             if (looseCash < amount && allowPrincipal) {
                 uint256 shortage = amount - looseCash;
                 IRWAProtocol(strategy).withdraw(shortage);
             }
         }
         
-        // Final Transfer
         uint256 finalBalance = asset.balanceOf(address(this));
         if (finalBalance < amount) amount = finalBalance;
         

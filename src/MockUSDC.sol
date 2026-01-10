@@ -27,7 +27,6 @@ contract MockUSDC is ERC20, Ownable {
         emit FaucetUsed(msg.sender, FAUCET_AMOUNT);
     }
 
-    // Allows protocols to auto-generate liquidity for yield payouts
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
         emit LiquidityMinted(to, amount);

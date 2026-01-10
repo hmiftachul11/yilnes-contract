@@ -45,7 +45,6 @@ abstract contract MockRWAProtocol is Ownable {
         APY = _apy;
     }
 
-    // --- 1. DEPOSIT ---
     function deposit(uint256 amount, bool useInsurance) external {
         _depositWithMode(amount, useInsurance);
     }
@@ -65,14 +64,12 @@ abstract contract MockRWAProtocol is Ownable {
         emit Deposit(msg.sender, amount, useInsurance);
     }
 
-    // --- 2. WITHDRAW (Principal) ---
     function withdraw(uint256 amount) external {
         require(amount > 0, "Amount must be > 0");
         _updateYield(msg.sender);
         
         require(amount <= userPrincipal[msg.sender], "Exceeds principal");
         
-        // Auto-Mint Liquidity if protocol is physically empty (Testnet Feature)
         uint256 contractBalance = usdc.balanceOf(address(this));
         if (contractBalance < amount) {
             uint256 shortage = amount - contractBalance;
@@ -86,7 +83,6 @@ abstract contract MockRWAProtocol is Ownable {
         emit WithdrawPrincipal(msg.sender, amount);
     }
 
-    // --- 3. CLAIM (Yield) ---
     function claimYield() external {
         _updateYield(msg.sender);
         
@@ -104,7 +100,6 @@ abstract contract MockRWAProtocol is Ownable {
             netPayout = grossYield - insuranceFee;
         }
         
-        // Auto-Mint Liquidity for yield
         uint256 contractBalance = usdc.balanceOf(address(this));
         if (contractBalance < grossYield) {
             uint256 shortage = grossYield - contractBalance;
@@ -128,7 +123,6 @@ abstract contract MockRWAProtocol is Ownable {
         emit InsuranceModeChanged(msg.sender, useInsurance);
     }
 
-    // --- VIEWS ---
     function getBalance(address user) public view returns (uint256) {
         return userPrincipal[user] + getPendingYield(user);
     }
@@ -174,7 +168,6 @@ abstract contract MockRWAProtocol is Ownable {
     }
 }
 
-// Concrete Implementations
 contract MockOndoProtocol is MockRWAProtocol {
     constructor(address _usdc, address _vault) MockRWAProtocol(_usdc, _vault, "Ondo USD Yield", "OUSY", 500) {}
 }
