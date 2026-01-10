@@ -4,7 +4,6 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./MockUSDC.sol"; 
 
-// Interface to call Mint
 interface IMintableUSDC {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
     function transfer(address to, uint256 amount) external returns (bool);
@@ -13,30 +12,31 @@ interface IMintableUSDC {
     function approve(address spender, uint256 amount) external returns (bool);
 }
 
-// Interface to call Vault
 interface IYilnesVault {
     function depositInsuranceProfit(uint256 amount) external;
 }
 
 abstract contract MockRWAProtocol is Ownable {
     IMintableUSDC public immutable usdc;
-    address public immutable insuranceVault; // [NEW] Link to Vault
-
+    address public immutable insuranceVault; 
+    
     string public name;
     string public symbol;
     uint256 public immutable APY; 
+    uint256 public constant INSURANCE_FEE_BPS = 1000; // 10%
     
-    mapping(address => uint256) public userPrincipal;
-    mapping(address => uint256) public accruedYield;
+    mapping(address => uint256) public userPrincipal; 
+    mapping(address => uint256) public accruedYield;  
     mapping(address => uint256) public lastUpdate;
+    mapping(address => bool) public userInsuranceMode; 
     
-    event Deposit(address indexed user, uint256 amount);
+    event Deposit(address indexed user, uint256 amount, bool insured);
     event WithdrawPrincipal(address indexed user, uint256 amount);
-    event ClaimYield(address indexed user, uint256 amount);
+    event ClaimYield(address indexed user, uint256 netAmount, uint256 insuranceFee, bool insured);
     event AutoMintedLiquidity(uint256 amount);
+    event InsuranceModeChanged(address indexed user, bool insured);
     event InsurancePaid(uint256 amount);
 
-    // [UPDATED] Constructor takes insuranceVault address
     constructor(address _usdc, address _insuranceVault, string memory _name, string memory _symbol, uint256 _apy) Ownable(msg.sender) {
         usdc = IMintableUSDC(_usdc);
         insuranceVault = _insuranceVault;
@@ -46,22 +46,39 @@ abstract contract MockRWAProtocol is Ownable {
     }
 
     // --- 1. DEPOSIT ---
+    function deposit(uint256 amount, bool useInsurance) external {
+        _depositWithMode(amount, useInsurance);
+    }
+    
     function deposit(uint256 amount) external {
+        _depositWithMode(amount, true); 
+    }
+    
+    function _depositWithMode(uint256 amount, bool useInsurance) internal {
         require(amount > 0, "Amount must be > 0");
-        _updateYield(msg.sender); 
+        _updateYield(msg.sender);
         
         require(usdc.transferFrom(msg.sender, address(this), amount), "Transfer failed");
         userPrincipal[msg.sender] += amount;
+        userInsuranceMode[msg.sender] = useInsurance;
         
-        emit Deposit(msg.sender, amount);
+        emit Deposit(msg.sender, amount, useInsurance);
     }
 
-    // --- 2. WITHDRAW (Principal Only) ---
+    // --- 2. WITHDRAW (Principal) ---
     function withdraw(uint256 amount) external {
         require(amount > 0, "Amount must be > 0");
         _updateYield(msg.sender);
         
-        require(amount <= userPrincipal[msg.sender], "Cannot withdraw more than principal. Use claimYield() for profits.");
+        require(amount <= userPrincipal[msg.sender], "Exceeds principal");
+        
+        // Auto-Mint Liquidity if protocol is physically empty (Testnet Feature)
+        uint256 contractBalance = usdc.balanceOf(address(this));
+        if (contractBalance < amount) {
+            uint256 shortage = amount - contractBalance;
+            usdc.mint(address(this), shortage);
+            emit AutoMintedLiquidity(shortage);
+        }
         
         userPrincipal[msg.sender] -= amount;
         require(usdc.transfer(msg.sender, amount), "Transfer failed");
@@ -69,22 +86,25 @@ abstract contract MockRWAProtocol is Ownable {
         emit WithdrawPrincipal(msg.sender, amount);
     }
 
-    // --- 3. CLAIM (Yield Only) ---
-    // [UPDATED] Pays 10% to Vault, 90% to User
+    // --- 3. CLAIM (Yield) ---
     function claimYield() external {
         _updateYield(msg.sender);
         
         uint256 grossYield = accruedYield[msg.sender];
         require(grossYield > 0, "No yield to claim");
         
-        // Reset accrued yield
         accruedYield[msg.sender] = 0;
         
-        // 1. Calculate Fees
-        uint256 insuranceFee = (grossYield * 1000) / 10000; // 10%
-        uint256 netPayout = grossYield - insuranceFee;      // 90%
-
-        // 2. Infinite Liquidity Check (Mint if needed)
+        bool isInsured = userInsuranceMode[msg.sender];
+        uint256 insuranceFee = 0;
+        uint256 netPayout = grossYield;
+        
+        if (isInsured && insuranceVault != address(0)) {
+            insuranceFee = (grossYield * INSURANCE_FEE_BPS) / 10000;
+            netPayout = grossYield - insuranceFee;
+        }
+        
+        // Auto-Mint Liquidity for yield
         uint256 contractBalance = usdc.balanceOf(address(this));
         if (contractBalance < grossYield) {
             uint256 shortage = grossYield - contractBalance;
@@ -92,20 +112,23 @@ abstract contract MockRWAProtocol is Ownable {
             emit AutoMintedLiquidity(shortage);
         }
         
-        // 3. Pay Insurance to Vault
-        if (insuranceFee > 0 && insuranceVault != address(0)) {
+        if (insuranceFee > 0) {
             usdc.approve(insuranceVault, insuranceFee);
             IYilnesVault(insuranceVault).depositInsuranceProfit(insuranceFee);
             emit InsurancePaid(insuranceFee);
         }
         
-        // 4. Pay Net Yield to User
         require(usdc.transfer(msg.sender, netPayout), "Transfer failed");
-        emit ClaimYield(msg.sender, netPayout);
+        emit ClaimYield(msg.sender, netPayout, insuranceFee, isInsured);
+    }
+    
+    function setInsuranceMode(bool useInsurance) external {
+        require(userPrincipal[msg.sender] > 0, "No active position");
+        userInsuranceMode[msg.sender] = useInsurance;
+        emit InsuranceModeChanged(msg.sender, useInsurance);
     }
 
     // --- VIEWS ---
-    
     function getBalance(address user) public view returns (uint256) {
         return userPrincipal[user] + getPendingYield(user);
     }
@@ -119,6 +142,27 @@ abstract contract MockRWAProtocol is Ownable {
         
         return accruedYield[user] + newInterest;
     }
+    
+    function getNetPendingYield(address user) public view returns (uint256) {
+        uint256 grossYield = getPendingYield(user);
+        if (grossYield == 0) return 0;
+        
+        if (userInsuranceMode[user] && insuranceVault != address(0)) {
+            uint256 insuranceFee = (grossYield * INSURANCE_FEE_BPS) / 10000;
+            return grossYield - insuranceFee;
+        }
+        return grossYield;
+    }
+    
+    function isUserInsured(address user) external view returns (bool) {
+        return userInsuranceMode[user];
+    }
+    
+    function getExpectedInsuranceFee(address user) external view returns (uint256) {
+        if (!userInsuranceMode[user] || insuranceVault == address(0)) return 0;
+        uint256 grossYield = getPendingYield(user);
+        return (grossYield * INSURANCE_FEE_BPS) / 10000;
+    }
 
     function _updateYield(address user) internal {
         if (lastUpdate[user] == 0) {
@@ -130,9 +174,7 @@ abstract contract MockRWAProtocol is Ownable {
     }
 }
 
-// --- CONCRETE PROTOCOLS ---
-// IMPORTANT: You must deploy YilnesVault FIRST, then pass its address here.
-
+// Concrete Implementations
 contract MockOndoProtocol is MockRWAProtocol {
     constructor(address _usdc, address _vault) MockRWAProtocol(_usdc, _vault, "Ondo USD Yield", "OUSY", 500) {}
 }
