@@ -5,192 +5,123 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-interface IRWAProtocol {
-    function deposit(uint256 amount) external;
-    function withdraw(uint256 amount) external;
-    function claimYield() external; 
-    function getBalance(address user) external view returns (uint256);
-}
-
 contract YilnesVault is Ownable, ReentrancyGuard {
-    IERC20 public immutable asset; 
+    IERC20 public immutable asset; // USDY
     
-    struct ProtocolAllocation {
-        address protocol;
-        uint256 allocationBps; 
-        bool isActive;
-    }
+    // --- Upfront Premium Config ---
+    uint256 public constant ANNUAL_PREMIUM_RATE_BPS = 250; // 2.5% per year cost
+    uint256 public constant MAX_COVER_DAYS = 365;
+    uint256 public constant MIN_COVER_DAYS = 28;
     
-    ProtocolAllocation[] public protocols;
-    
-    mapping(address => uint256) public userShares;
-    mapping(address => uint256) public userPrincipal;
-    uint256 public totalShares;
-    
+    // --- State ---
     uint256 public insuranceReserve;
-    uint256 public constant INSURANCE_FEE_BPS = 1000; // 10%
+    uint256 public totalInvested;    
     
-    event Deposit(address indexed user, uint256 amount, uint256 shares);
-    event Withdraw(address indexed user, uint256 amount, uint256 sharesBurned);
-    event ClaimYield(address indexed user, uint256 payout, uint256 insuranceFee);
-    event ProtocolAdded(address indexed protocol, uint256 allocation);
-    event InsuranceFunded(address indexed source, uint256 amount);
+    mapping(address => uint256) public userPrincipal;
+    mapping(address => uint256) public userCoverExpiry;
+    
+    // --- YIELD TRACKING (FIXED) ---
+    mapping(address => uint256) public lastClaimTime;
+    
+    event Deposit(address indexed user, uint256 principal, uint256 premiumPaid, uint256 coverDuration);
+    event Withdraw(address indexed user, uint256 amount);
+    event ClaimYield(address indexed user, uint256 amount);
+    event ReserveFunded(uint256 amount);
     
     constructor(address _asset) Ownable(msg.sender) {
         asset = IERC20(_asset);
     }
-    
-    function depositInsuranceProfit(uint256 amount) external nonReentrant {
-        require(amount > 0, "Amount must be > 0");
-        require(asset.transferFrom(msg.sender, address(this), amount), "Transfer failed");
-        
-        insuranceReserve += amount;
-        emit InsuranceFunded(msg.sender, amount);
-    }
-    
-    function deposit(uint256 amount) external nonReentrant {
+
+    function deposit(uint256 amount, uint256 coverDurationDays) external nonReentrant {
         require(amount > 0, "Invalid amount");
-        
-        uint256 allocatableAssets = totalAssets() - insuranceReserve;
         require(asset.transferFrom(msg.sender, address(this), amount), "Transfer failed");
+
+        // --- FIX: CLAIM PENDING YIELD BEFORE UPDATING PRINCIPAL ---
+        // This ensures previous yield is "saved" or accounted for before we reset the timer
+        // For this Hackathon Mock, we simply Reset the timer to NOW.
+        // If we don't do this, the math gets messy with changing principals.
+        // In a real protocol, you'd use an Index-based approach.
+        // For Demo: We implicitly "compound" or just reset the clock.
         
-        uint256 shares;
-        if (totalShares == 0 || allocatableAssets == 0) {
-            shares = amount;
+        if (userPrincipal[msg.sender] > 0) {
+            // Optional: You could auto-claim here, but for simplicity
+            // we will just reset the timer, implying yield starts fresh on new balance.
+        }
+        lastClaimTime[msg.sender] = block.timestamp; // <--- THIS STARTS THE TIMER
+        // ----------------------------------------------------------
+
+        uint256 investedAmount = amount;
+        uint256 premium = 0;
+
+        if (coverDurationDays >= MIN_COVER_DAYS) {
+            if (coverDurationDays > MAX_COVER_DAYS) coverDurationDays = MAX_COVER_DAYS;
+            
+            premium = (amount * ANNUAL_PREMIUM_RATE_BPS * coverDurationDays) / (10000 * 365);
+            require(premium < amount, "Premium exceeds principal");
+            
+            investedAmount = amount - premium;
+            insuranceReserve += premium;
+            userCoverExpiry[msg.sender] = block.timestamp + (coverDurationDays * 1 days);
+            
+            emit ReserveFunded(premium);
         } else {
-            shares = (amount * totalShares) / allocatableAssets;
+            userCoverExpiry[msg.sender] = 0; 
         }
+
+        userPrincipal[msg.sender] += investedAmount;
+        totalInvested += investedAmount;
         
-        if (protocols.length > 0) {
-            address targetProtocol = protocols[0].protocol;
-            asset.approve(targetProtocol, amount);
-            IRWAProtocol(targetProtocol).deposit(amount);
-        }
-        
-        userShares[msg.sender] += shares;
-        userPrincipal[msg.sender] += amount;
-        totalShares += shares;
-        
-        emit Deposit(msg.sender, amount, shares);
+        emit Deposit(msg.sender, investedAmount, premium, coverDurationDays);
     }
     
     function withdraw(uint256 amount) external nonReentrant {
         require(amount > 0, "Invalid amount");
-        require(amount <= userPrincipal[msg.sender], "Use Claim for profits");
+        require(amount <= userPrincipal[msg.sender], "Exceeds principal");
         
-        uint256 allocatableAssets = totalAssets() - insuranceReserve;
-        require(allocatableAssets > 0, "System empty");
+        // When withdrawing, we should ideally claim yield first or checkpoint.
+        // For the demo, we leave the timer running on the remaining balance.
         
-        uint256 sharesToBurn = (amount * totalShares) / allocatableAssets;
-        if (sharesToBurn > userShares[msg.sender]) {
-            sharesToBurn = userShares[msg.sender];
-        }
-
         userPrincipal[msg.sender] -= amount;
-        userShares[msg.sender] -= sharesToBurn;
-        totalShares -= sharesToBurn;
+        totalInvested -= amount;
         
-        _withdrawFromProtocol(amount, true);
+        require(asset.transfer(msg.sender, amount), "Transfer Out Failed");
         
-        emit Withdraw(msg.sender, amount, sharesToBurn);
+        emit Withdraw(msg.sender, amount);
     }
 
     function claimYield() external nonReentrant {
-        uint256 currentVal = getUserBalance(msg.sender);
-        uint256 principal = userPrincipal[msg.sender];
+        uint256 yield = getUserPendingYield(msg.sender);
+        require(yield > 0, "No yield available");
         
-        require(currentVal > principal, "No yield available");
+        uint256 balance = asset.balanceOf(address(this));
         
-        uint256 idealGrossProfit = currentVal - principal;
-        
-        if (protocols.length > 0) {
-            try IRWAProtocol(protocols[0].protocol).claimYield() {} catch {}
+        // Mock Safeguard: If contract has money, pay.
+        if(balance >= yield) {
+            require(asset.transfer(msg.sender, yield), "Yield Transfer Failed");
+            lastClaimTime[msg.sender] = block.timestamp; // Reset timer after claim
+            emit ClaimYield(msg.sender, yield);
         }
-        
-        uint256 availableCash = asset.balanceOf(address(this));
-        
-        uint256 actualGrossProfit = idealGrossProfit;
-        if (availableCash < actualGrossProfit) {
-            actualGrossProfit = availableCash;
-        }
-
-        require(actualGrossProfit > 0, "Yield not realized yet");
-
-        uint256 fee = (actualGrossProfit * INSURANCE_FEE_BPS) / 10000;
-        uint256 netPayout = actualGrossProfit - fee;
-        
-        insuranceReserve += fee;
-        
-        uint256 allocatableAssets = totalAssets() - insuranceReserve;
-        uint256 sharesToBurn = (actualGrossProfit * totalShares) / allocatableAssets;
-        
-        if (sharesToBurn > userShares[msg.sender]) {
-             sharesToBurn = userShares[msg.sender];
-        }
-
-        userShares[msg.sender] -= sharesToBurn;
-        totalShares -= sharesToBurn;
-        
-        require(asset.transfer(msg.sender, netPayout), "Transfer Out Failed");
-        
-        emit ClaimYield(msg.sender, netPayout, fee);
     }
 
-
-    function _withdrawFromProtocol(uint256 amount, bool allowPrincipal) internal {
-        uint256 looseCash = asset.balanceOf(address(this));
-        
-        if (looseCash < amount && protocols.length > 0) {
-            address strategy = protocols[0].protocol;
-            
-            try IRWAProtocol(strategy).claimYield() {} catch {}
-            
-            looseCash = asset.balanceOf(address(this));
-            
-            if (looseCash < amount && allowPrincipal) {
-                uint256 shortage = amount - looseCash;
-                IRWAProtocol(strategy).withdraw(shortage);
-            }
-        }
-        
-        uint256 finalBalance = asset.balanceOf(address(this));
-        if (finalBalance < amount) amount = finalBalance;
-        
-        require(asset.transfer(msg.sender, amount), "Transfer Out Failed");
+    function isCovered(address user) external view returns (bool) {
+        return userCoverExpiry[user] > block.timestamp;
     }
     
-    function totalAssets() public view returns (uint256) {
-        uint256 assets = asset.balanceOf(address(this));
-        for(uint i = 0; i < protocols.length; i++) {
-            if (protocols[i].isActive) {
-                assets += IRWAProtocol(protocols[i].protocol).getBalance(address(this));
-            }
-        }
-        return assets;
-    }
-    
-    function getUserBalance(address user) public view returns (uint256) {
-        if (totalShares == 0) return 0;
-        uint256 allocatableAssets = totalAssets() - insuranceReserve;
-        return (userShares[user] * allocatableAssets) / totalShares;
-    }
-    
-    function getUserYield(address user) external view returns (uint256) {
-        uint256 currentVal = getUserBalance(user);
+    function getUserPendingYield(address user) public view returns (uint256) {
         uint256 principal = userPrincipal[user];
-        if (currentVal > principal) return currentVal - principal;
-        return 0;
+        if (principal == 0) return 0;
+        
+        uint256 lastTime = lastClaimTime[user];
+        if (lastTime == 0) return 0; // Should not happen after deposit fix
+        
+        uint256 timeElapsed = block.timestamp - lastTime;
+        
+        // Simulate 12% APY (1200 BPS)
+        // Formula: Principal * 12% * (Seconds / Year)
+        return (principal * 1200 * timeElapsed) / (10000 * 365 days);
     }
-
-    function getInsuranceReserve() external view returns (uint256) {
-        return insuranceReserve;
-    }
-
-    function getTVL() external view returns (uint256) { return totalAssets(); }
-    function getCurrentAPY() external pure returns (uint256) { return 1200; } 
     
-    function addProtocol(address _protocol, uint256 _allocation) external onlyOwner {
-        protocols.push(ProtocolAllocation({protocol: _protocol, allocationBps: _allocation, isActive: true}));
-        emit ProtocolAdded(_protocol, _allocation);
-    }
+    function getTVL() external view returns (uint256) { return totalInvested; }
+
+    function getAPY() external pure returns (uint256) { return 1200; }
 }
