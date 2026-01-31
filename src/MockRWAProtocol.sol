@@ -2,46 +2,41 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-// IMPORT UPDATE: Now points to the specific file
-import "./MockUSDY.sol"; 
+import "./MockUSDC.sol"; 
 
 contract MockRWAProtocol is Ownable {
-    MockUSDY public immutable usdy;
+    MockUSDC public immutable usdc;
     
     string public name;
-    uint256 public immutable APY_BPS; 
+    uint256 public immutable APY_BPS;
     
-    // Yilnes Wrapper State
     uint256 public insuranceReserve;
     mapping(address => uint256) public userPrincipal; 
     mapping(address => uint256) public lastUpdate;
     mapping(address => uint256) public coverExpiry; 
     
-    // Config
-    uint256 public constant ANNUAL_PREMIUM_BPS = 250; // 2.5%
+    uint256 public constant ANNUAL_PREMIUM_BPS = 250;
     
     event Deposit(address indexed user, uint256 invested, uint256 premium, bool insured);
     event Claim(address indexed user, uint256 amount);
 
-    constructor(address _usdy, string memory _name, uint256 _apy) Ownable(msg.sender) {
-        usdy = MockUSDY(_usdy);
+    constructor(address _usdc, string memory _name, uint256 _apy) Ownable(msg.sender) {
+        usdc = MockUSDC(_usdc);
         name = _name;
         APY_BPS = _apy;
     }
 
-    // --- Upfront Premium Deposit ---
     function deposit(uint256 amount, uint256 coverDurationDays) external {
         require(amount > 0, "Amount > 0");
-        require(usdy.transferFrom(msg.sender, address(this), amount), "Transfer failed");
+        require(usdc.transferFrom(msg.sender, address(this), amount), "Transfer failed");
         
-        // Auto-claim any previous pending yield before changing principal
         _claimInternal(msg.sender);
 
         uint256 invested = amount;
         uint256 premium = 0;
         
         if (coverDurationDays >= 28) {
-            // Premium Logic: Principal * 2.5% * (Days / 365)
+            // Math works fine for 6 decimals as long as amount is scaled
             premium = (amount * ANNUAL_PREMIUM_BPS * coverDurationDays) / (10000 * 365);
             require(premium < amount, "Cost too high");
             
@@ -49,7 +44,6 @@ contract MockRWAProtocol is Ownable {
             insuranceReserve += premium;
             coverExpiry[msg.sender] = block.timestamp + (coverDurationDays * 1 days);
         } else {
-            // Direct / Uninsured
             coverExpiry[msg.sender] = 0; 
         }
         
@@ -60,11 +54,11 @@ contract MockRWAProtocol is Ownable {
     }
 
     function withdraw(uint256 amount) external {
-        _claimInternal(msg.sender); // Claim yield first
+        _claimInternal(msg.sender);
         require(amount <= userPrincipal[msg.sender], "Over withdraw");
         
         userPrincipal[msg.sender] -= amount;
-        require(usdy.transfer(msg.sender, amount), "Transfer failed");
+        require(usdc.transfer(msg.sender, amount), "Transfer failed");
     }
 
     function claim() external {
@@ -75,10 +69,10 @@ contract MockRWAProtocol is Ownable {
         uint256 yield = getPendingYield(user);
         if (yield > 0) {
             lastUpdate[user] = block.timestamp;
-            // Check liquidity (Mock safety check)
-            uint256 available = usdy.balanceOf(address(this));
+            uint256 available = usdc.balanceOf(address(this));
+            // Only transfer if contract has funds (Mock Logic)
             if(available >= yield) {
-                usdy.transfer(user, yield);
+                usdc.transfer(user, yield);
                 emit Claim(user, yield);
             }
         } else {
@@ -89,6 +83,7 @@ contract MockRWAProtocol is Ownable {
     function getPendingYield(address user) public view returns (uint256) {
         if (userPrincipal[user] == 0) return 0;
         uint256 timeElapsed = block.timestamp - lastUpdate[user];
+        // Standard Simple Interest Formula
         return (userPrincipal[user] * APY_BPS * timeElapsed) / (10000 * 365 days);
     }
     
@@ -97,19 +92,18 @@ contract MockRWAProtocol is Ownable {
     }
 }
 
-// Factory Contracts for Specific RWAs
 contract MockOndo is MockRWAProtocol {
-    constructor(address _usdy) MockRWAProtocol(_usdy, "Ondo USDY Strategy", 520) {} // 5.2%
+    constructor(address _usdc) MockRWAProtocol(_usdc, "Ondo USDY Strategy", 520) {}
 }
 
 contract MockMaple is MockRWAProtocol {
-    constructor(address _usdy) MockRWAProtocol(_usdy, "Maple Direct", 850) {} // 8.5%
+    constructor(address _usdc) MockRWAProtocol(_usdc, "Maple Direct", 850) {}
 }
 
 contract MockCentrifuge is MockRWAProtocol {
-    constructor(address _usdy) MockRWAProtocol(_usdy, "Centrifuge Prime", 1200) {} // 12%
+    constructor(address _usdc) MockRWAProtocol(_usdc, "Centrifuge Prime", 1200) {}
 }
 
 contract MockGoldfinch is MockRWAProtocol {
-    constructor(address _usdy) MockRWAProtocol(_usdy, "Goldfinch Senior", 600) {} // 6%
+    constructor(address _usdc) MockRWAProtocol(_usdc, "Goldfinch Senior", 600) {}
 }

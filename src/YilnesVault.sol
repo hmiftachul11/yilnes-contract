@@ -6,21 +6,18 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 contract YilnesVault is Ownable, ReentrancyGuard {
-    IERC20 public immutable asset; // USDY
+    IERC20 public immutable asset; // This will be USDC
     
-    // --- Upfront Premium Config ---
-    uint256 public constant ANNUAL_PREMIUM_RATE_BPS = 250; // 2.5% per year cost
+    uint256 public constant ANNUAL_PREMIUM_RATE_BPS = 250;
     uint256 public constant MAX_COVER_DAYS = 365;
     uint256 public constant MIN_COVER_DAYS = 28;
     
-    // --- State ---
     uint256 public insuranceReserve;
     uint256 public totalInvested;    
     
     mapping(address => uint256) public userPrincipal;
     mapping(address => uint256) public userCoverExpiry;
     
-    // --- YIELD TRACKING (FIXED) ---
     mapping(address => uint256) public lastClaimTime;
     
     event Deposit(address indexed user, uint256 principal, uint256 premiumPaid, uint256 coverDuration);
@@ -36,19 +33,11 @@ contract YilnesVault is Ownable, ReentrancyGuard {
         require(amount > 0, "Invalid amount");
         require(asset.transferFrom(msg.sender, address(this), amount), "Transfer failed");
 
-        // --- FIX: CLAIM PENDING YIELD BEFORE UPDATING PRINCIPAL ---
-        // This ensures previous yield is "saved" or accounted for before we reset the timer
-        // For this Hackathon Mock, we simply Reset the timer to NOW.
-        // If we don't do this, the math gets messy with changing principals.
-        // In a real protocol, you'd use an Index-based approach.
-        // For Demo: We implicitly "compound" or just reset the clock.
-        
-        if (userPrincipal[msg.sender] > 0) {
-            // Optional: You could auto-claim here, but for simplicity
-            // we will just reset the timer, implying yield starts fresh on new balance.
+        // If user already has principal, we ideally claim yield first, 
+        // but for Hackathon simplicity we just reset the timer if they claim manually.
+        if (userPrincipal[msg.sender] == 0) {
+             lastClaimTime[msg.sender] = block.timestamp;
         }
-        lastClaimTime[msg.sender] = block.timestamp; // <--- THIS STARTS THE TIMER
-        // ----------------------------------------------------------
 
         uint256 investedAmount = amount;
         uint256 premium = 0;
@@ -56,6 +45,7 @@ contract YilnesVault is Ownable, ReentrancyGuard {
         if (coverDurationDays >= MIN_COVER_DAYS) {
             if (coverDurationDays > MAX_COVER_DAYS) coverDurationDays = MAX_COVER_DAYS;
             
+            // Calculate Premium
             premium = (amount * ANNUAL_PREMIUM_RATE_BPS * coverDurationDays) / (10000 * 365);
             require(premium < amount, "Premium exceeds principal");
             
@@ -78,9 +68,6 @@ contract YilnesVault is Ownable, ReentrancyGuard {
         require(amount > 0, "Invalid amount");
         require(amount <= userPrincipal[msg.sender], "Exceeds principal");
         
-        // When withdrawing, we should ideally claim yield first or checkpoint.
-        // For the demo, we leave the timer running on the remaining balance.
-        
         userPrincipal[msg.sender] -= amount;
         totalInvested -= amount;
         
@@ -95,10 +82,11 @@ contract YilnesVault is Ownable, ReentrancyGuard {
         
         uint256 balance = asset.balanceOf(address(this));
         
-        // Mock Safeguard: If contract has money, pay.
+        // Mock Yield: We assume the contract has earned money elsewhere. 
+        // If contract balance < yield, we only pay what we have.
         if(balance >= yield) {
             require(asset.transfer(msg.sender, yield), "Yield Transfer Failed");
-            lastClaimTime[msg.sender] = block.timestamp; // Reset timer after claim
+            lastClaimTime[msg.sender] = block.timestamp;
             emit ClaimYield(msg.sender, yield);
         }
     }
@@ -112,12 +100,11 @@ contract YilnesVault is Ownable, ReentrancyGuard {
         if (principal == 0) return 0;
         
         uint256 lastTime = lastClaimTime[user];
-        if (lastTime == 0) return 0; // Should not happen after deposit fix
+        if (lastTime == 0) return 0;
         
         uint256 timeElapsed = block.timestamp - lastTime;
         
-        // Simulate 12% APY (1200 BPS)
-        // Formula: Principal * 12% * (Seconds / Year)
+        // 12% APY (1200 BPS)
         return (principal * 1200 * timeElapsed) / (10000 * 365 days);
     }
     

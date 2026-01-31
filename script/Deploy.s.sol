@@ -1,53 +1,38 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "forge-std/Script.sol";
-// IMPORT UPDATE: Now points to MockUSDY
-import "../src/MockUSDY.sol"; 
-import "../src/YilnesVault.sol";
-import "../src/MockRWAProtocol.sol"; 
+import {Script, console2} from "forge-std/Script.sol";
+import {MockUSDC} from "../src/MockUSDC.sol";
+import {YilnesVault} from "../src/YilnesVault.sol";
+import {MockOndo, MockMaple, MockCentrifuge, MockGoldfinch} from "../src/MockRWAProtocol.sol";
 
 contract DeployScript is Script {
-    function run() external {
+    function run() public {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         
         vm.startBroadcast(deployerPrivateKey);
-        
-        // 1. Deploy MockUSDY
-        console.log("Deploying MockUSDY...");
-        MockUSDY usdy = new MockUSDY();
-        console.log("MockUSDY deployed at:", address(usdy));
-        
-        // 2. Deploy YilnesVault
-        console.log("Deploying YilnesVault...");
-        YilnesVault vault = new YilnesVault(address(usdy));
-        console.log("YilnesVault deployed at:", address(vault));
-        
-        // 3. Deploy Mock RWA Protocols
-        console.log("Deploying Mock RWA Protocols...");
-        
-        MockOndo ondo = new MockOndo(address(usdy));
-        console.log("MockOndo deployed at:", address(ondo));
-        
-        MockMaple maple = new MockMaple(address(usdy));
-        console.log("MockMaple deployed at:", address(maple));
-        
-        MockCentrifuge centrifuge = new MockCentrifuge(address(usdy));
-        console.log("MockCentrifuge deployed at:", address(centrifuge));
 
-        MockGoldfinch goldfinch = new MockGoldfinch(address(usdy));
-        console.log("MockGoldfinch deployed at:", address(goldfinch));
-        
+        // 1. Deploy MockUSDC (6 Decimals)
+        MockUSDC usdc = new MockUSDC();
+        console2.log("MockUSDC deployed at:", address(usdc));
+
+        // 2. Deploy YilnesVault
+        YilnesVault vault = new YilnesVault(address(usdc));
+        console2.log("YilnesVault deployed at:", address(vault));
+
+        // 3. Deploy Mock Protocols
+        MockOndo ondo = new MockOndo(address(usdc));
+        console2.log("MockOndo deployed at:", address(ondo));
+
+        MockMaple maple = new MockMaple(address(usdc));
+        console2.log("MockMaple deployed at:", address(maple));
+
+        MockCentrifuge centrifuge = new MockCentrifuge(address(usdc));
+        console2.log("MockCentrifuge deployed at:", address(centrifuge));
+
+        MockGoldfinch goldfinch = new MockGoldfinch(address(usdc));
+        console2.log("MockGoldfinch deployed at:", address(goldfinch));
+
         vm.stopBroadcast();
-        
-        // Print Summary
-        console.log("\n=== DEPLOYMENT SUMMARY ===");
-        console.log("NEXT_PUBLIC_MOCK_USDY_ADDRESS=", address(usdy));
-        console.log("NEXT_PUBLIC_YILNES_VAULT_ADDRESS=", address(vault));
-        console.log("NEXT_PUBLIC_MOCK_ONDO_ADDRESS=", address(ondo));
-        console.log("NEXT_PUBLIC_MOCK_MAPLE_ADDRESS=", address(maple));
-        console.log("NEXT_PUBLIC_MOCK_CENTRIFUGE_ADDRESS=", address(centrifuge));
-        console.log("NEXT_PUBLIC_MOCK_GOLDFINCH_ADDRESS=", address(goldfinch));
-        console.log("========================");
     }
 }
